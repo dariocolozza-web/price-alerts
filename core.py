@@ -159,6 +159,8 @@ def compute_expiry(kind: str, tz: ZoneInfo, days: int = 1, until: Optional[date]
     today = datetime.now(tz).date()
     if kind == "forever":
         return None, "Infinito"
+    if kind == "once":
+        return None, "Fino al primo scatto"
     if kind == "today":
         end_day, label = today, "Solo oggi"
     elif kind == "days":

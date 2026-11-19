@@ -193,18 +193,25 @@ with st.container(border=True):
                             format_func=lambda m: "Al tocco (massimo/minimo candele 5m)" if m == MODE_TOUCH
                             else "Su chiusura di una candela 5m oltre il livello")
     with c3:
-        dkind = st.selectbox("Durata", ["today", "days", "until", "forever"],
-                             format_func={"today": "Solo oggi", "days": "Per N giorni",
-                                          "until": "Fino a una data", "forever": "Infinito (finché non lo rimuovo)"}.get)
+        dkind = st.selectbox("Durata", ["once", "today", "days", "until", "forever"],
+                             format_func={"once": "Fino al primo scatto (poi si disattiva)",
+                                          "today": "Solo oggi", "days": "Per N giorni",
+                                          "until": "Fino a una data",
+                                          "forever": "Infinito (finché non lo rimuovo)"}.get)
         ndays, until = 1, None
         if dkind == "days":
             ndays = st.number_input("Numero di giorni (oggi incluso)", min_value=1, max_value=3650, value=5)
         elif dkind == "until":
             until = st.date_input("Scade a fine giornata del", value=date.today() + timedelta(days=7),
                                   min_value=date.today(), format="DD/MM/YYYY")
-        repeat = st.checkbox("Ri-arma dopo lo scatto", value=False,
-                             help="Se attivo, dopo l'alert si ri-arma quando il prezzo torna dall'altra parte "
-                                  "del livello e può scattare di nuovo. Se disattivo, scatta una volta sola.")
+        if dkind == "once":
+            repeat = False
+            st.caption("L'alert resta attivo senza scadenza e, appena scatta, si disattiva.")
+        else:
+            repeat = st.checkbox("Ri-arma dopo lo scatto", value=False,
+                                 help="Se attivo, dopo l'alert si ri-arma quando il prezzo torna dall'altra parte "
+                                      "del livello e può scattare di nuovo. Se disattivo, scatta una volta sola "
+                                      "e si disattiva.")
         note = st.text_input("Nota (opzionale)", placeholder="es. breakout massimi settimanali")
 
     expires_at, dlabel = core.compute_expiry(dkind, TZ, int(ndays), until)
