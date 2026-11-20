@@ -53,7 +53,7 @@ class Config:
     alerts_file: str = "alerts.json"
     gist_id: str = ""
     github_token: str = ""
-    include_prepost: bool = False      # includi pre/after-market per le azioni USA
+    include_prepost: bool = True       # includi pre/after-market per le azioni USA
     notify_expiry: bool = True         # messaggio Telegram quando un alert scade senza scattare
     check_interval_minutes: int = 60
     run_scheduler: bool = True         # thread interno all'app Streamlit
@@ -82,7 +82,7 @@ class Config:
             alerts_file=str(get("ALERTS_FILE", "alerts.json") or "alerts.json"),
             gist_id=str(get("GIST_ID", "") or ""),
             github_token=str(get("GITHUB_TOKEN", "") or ""),
-            include_prepost=b(get("INCLUDE_PREPOST", False)),
+            include_prepost=b(get("INCLUDE_PREPOST", True)),
             notify_expiry=b(get("NOTIFY_EXPIRY", True)),
             check_interval_minutes=int(get("CHECK_INTERVAL_MINUTES", 60) or 60),
             run_scheduler=b(get("RUN_SCHEDULER", True)),
@@ -204,6 +204,13 @@ class Store:
             self._write([a.to_dict() for a in alerts])
             return alerts
 
+    # stato dell'ultimo controllo (scritto da run_check, letto dalla UI)
+    def read_status(self) -> dict:
+        return {}
+
+    def write_status(self, status: dict) -> None:
+        pass
+
     # scorciatoie usate dalla UI
     def add(self, alert: Alert) -> None:
         self.update(lambda al: al + [alert])
@@ -242,6 +249,21 @@ class JsonStore(Store):
             json.dump(data, f, indent=2, ensure_ascii=False)
         os.replace(tmp, self.path)  # scrittura atomica
 
+    @property
+    def _status_path(self) -> str:
+        return self.path + ".status.json"
+
+    def read_status(self) -> dict:
+        try:
+            with open(self._status_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def write_status(self, status: dict) -> None:
+        with open(self._status_path, "w", encoding="utf-8") as f:
+            json.dump(status, f, ensure_ascii=False)
+
 
 class GistStore(Store):
     """Salva gli alert in un GitHub Gist (segreto): persiste anche se Streamlit Cloud riavvia l'app,
@@ -269,6 +291,24 @@ class GistStore(Store):
 
     def _write(self, data: list[dict]) -> None:
         body = {"files": {self.FILENAME: {"content": json.dumps(data, indent=2, ensure_ascii=False)}}}
+        r = requests.patch(self.url, headers=self.headers, json=body, timeout=20)
+        r.raise_for_status()
+
+    STATUS_FILENAME = "status.json"
+
+    def read_status(self) -> dict:
+        r = requests.get(self.url, headers=self.headers, timeout=20)
+        r.raise_for_status()
+        f = r.json().get("files", {}).get(self.STATUS_FILENAME)
+        if not f:
+            return {}
+        try:
+            return json.loads(f.get("content") or "{}")
+        except ValueError:
+            return {}
+
+    def write_status(self, status: dict) -> None:
+        body = {"files": {self.STATUS_FILENAME: {"content": json.dumps(status, ensure_ascii=False)}}}
         r = requests.patch(self.url, headers=self.headers, json=body, timeout=20)
         r.raise_for_status()
 
@@ -424,6 +464,7 @@ def run_check(cfg: Config, store: Store, now: Optional[datetime] = None,
 
     snapshot = [a for a in store.load() if a.status == ST_ACTIVE]
     if not snapshot:
+        _finish(cfg, store, summary, notify)
         return summary
 
     # 1) download (una volta per ticker)
@@ -490,7 +531,44 @@ def run_check(cfg: Config, store: Store, now: Optional[datetime] = None,
 
     store.update(apply)
     summary["errors"] = list(dict.fromkeys(summary["errors"]))
+    _finish(cfg, store, summary, notify)
     return summary
+
+
+def _finish(cfg: Config, store: Store, summary: dict, notify: Callable[[Config, str], None]) -> None:
+    """Chiude il giro: avvisa su Telegram se ci sono problemi (una volta sola finché restano uguali,
+    poi un messaggio quando tornano a posto) e registra lo stato per la barra laterale."""
+    try:
+        prev = store.read_status()
+    except Exception:  # noqa: BLE001
+        prev = {}
+    prev_sig = prev.get("error_sig", "")
+    sig = "|".join(sorted(summary["errors"]))
+    saved_sig = prev_sig
+
+    if cfg.telegram_ok and sig != prev_sig:
+        try:
+            if sig:
+                body = "\n".join(f"• {html.escape(e)}" for e in summary["errors"][:5])
+                notify(cfg, "⚠️ <b>Price Alerts</b>: il controllo ha avuto problemi\n" + body)
+            else:
+                notify(cfg, "✅ <b>Price Alerts</b>: il controllo è tornato regolare.")
+            saved_sig = sig
+        except Exception as e:  # noqa: BLE001
+            log.warning("avviso problemi non inviato (riprovo al prossimo giro): %s", e)
+    elif not cfg.telegram_ok:
+        saved_sig = sig
+
+    try:
+        store.write_status({
+            "last_run": summary["time"],
+            "checked": summary["checked"],
+            "triggered": len(summary["triggered"]),
+            "errors": summary["errors"][:5],
+            "error_sig": saved_sig,
+        })
+    except Exception as e:  # noqa: BLE001
+        log.warning("salvataggio stato fallito: %s", e)
 
 
 def next_run_time(now: datetime, interval_minutes: int, offset_seconds: int = 60) -> datetime:
