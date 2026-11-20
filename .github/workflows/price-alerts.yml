@@ -1,9 +1,13 @@
+# Controllo orario indipendente dall'app Streamlit (che su Streamlit Cloud può andare in sleep).
+# Richiede GIST_ID + GITHUB_TOKEN (gli alert devono stare nel Gist, non nel repo).
+# Secrets da creare in: repo -> Settings -> Secrets and variables -> Actions
+#   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, GIST_ID, GIST_TOKEN
 name: price-alerts
 
 on:
   schedule:
-    - cron: "1 * * * *"
-  workflow_dispatch: {}
+    - cron: "1 * * * *"      # ogni ora al minuto :01 (UTC). GitHub può ritardare di qualche minuto.
+  workflow_dispatch: {}       # pulsante "Run workflow" per lanciarlo a mano
 
 concurrency:
   group: price-alerts
@@ -27,3 +31,17 @@ jobs:
           GIST_ID: ${{ secrets.GIST_ID }}
           GITHUB_TOKEN: ${{ secrets.GIST_TOKEN }}
           TIMEZONE: Europe/Rome
+
+      # Se il controllo si ferma del tutto (errore di installazione, crash, gist non raggiungibile)
+      # lo script Python non può avvisare: ci pensa questo passaggio.
+      - name: Avvisa su Telegram se il controllo è fallito
+        if: failure()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=⚠️ Price Alerts: il controllo orario è fallito. Dettagli: ${RUN_URL}" \
+            > /dev/null || true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
