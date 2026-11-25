@@ -9,6 +9,7 @@ Legge la config dalle variabili d'ambiente (stessi nomi di secrets.toml).
 """
 import argparse
 import logging
+import os
 import sys
 import time
 
@@ -33,6 +34,10 @@ def main() -> int:
     cfg = core.Config.from_env()
     if not cfg.telegram_ok:
         logging.error("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID mancanti")
+        return 1
+    if bool(cfg.gist_id) != bool(cfg.github_token) or (os.environ.get("GITHUB_ACTIONS") and not cfg.gist_id):
+        # su GitHub Actions senza gist leggerei un alerts.json vuoto e non controllerei niente
+        logging.error("GIST_ID / GITHUB_TOKEN (secret GIST_TOKEN) mancanti: non trovo il gist con gli alert")
         return 1
     if not args.loop:
         return once(cfg)
